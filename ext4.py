@@ -1,5 +1,6 @@
 # https://www.kernel.org/doc/html/latest/filesystems/ext4/globals.html#super-block
 #!/usr/bin/env python3
+import enum
 import struct
 import dataclasses
 
@@ -128,6 +129,34 @@ EXT4INODE_FIELDS = [
 ]
 
 
+class InodeFileType(enum.IntEnum):
+    S_IFIFO = 0x1000  # FIFO
+    S_IFCHR = 0x2000  # Character device
+    S_IFDIR = 0x4000  # Directory
+    S_IFBLK = 0x6000  # Block device
+    S_IFREG = 0x8000  # Regular file
+    S_IFLNK = 0xA000  # Symbolic link
+    S_IFSOCK = 0xC000  # Socket
+
+    @classmethod
+    def from_raw(cls, i_mode: int) -> 'InodeFileType':
+        if i_mode & cls.S_IFIFO != 0:
+            return InodeFileType.S_IFIFO
+        elif i_mode & cls.S_IFCHR != 0:
+            return InodeFileType.S_IFCHR
+        elif i_mode & cls.S_IFDIR != 0:
+            return InodeFileType.S_IFDIR
+        elif i_mode & cls.S_IFBLK != 0:
+            return InodeFileType.S_IFBLK
+        elif i_mode & cls.S_IFREG != 0:
+            return InodeFileType.S_IFREG
+        elif i_mode & cls.S_IFLNK != 0:
+            return InodeFileType.S_IFLNK
+        elif i_mode & cls.S_IFSOCK != 0:
+            return InodeFileType.S_IFSOCK
+        raise ValueError(f'unknown inode file type: {i_mode}')
+
+
 @dataclasses.dataclass
 class Ext4Inode(Ext4Struct):
     FIELDS = EXT4INODE_FIELDS
@@ -144,6 +173,26 @@ class Ext4Inode(Ext4Struct):
     i_flags: int
     i_size_high: int
     i_extra_isize: int
+
+
+class Inode:
+
+    def __init__(self, i_num: int, offset: int, e4inode: Ext4Inode) -> None:
+        self.i_num = i_num
+        self.offset = offset
+        self.e4inode = e4inode
+        self.file_type = InodeFileType.from_raw(e4inode.i_mode)
+
+    def __repr__(self):
+        return f'Inode(i_num={self.i_num}, offset={self.offset})'
+
+    @property
+    def is_file(self):
+        return self.file_type == InodeFileType.S_IFREG
+
+    @property
+    def is_dir(self):
+        return self.file_type == InodeFileType.S_IFDIR
 
 
 class Ext4Filesystem:
@@ -182,24 +231,33 @@ class Ext4Filesystem:
             # the group descriptor has has a size of 64 bytes (on 64bit at least)
             self.gdt.append(Ext4GroupDescriptor.from_bytes(self.read_bytes(group_desc_offset, 64)))
 
-    def get_root(self):
+    def get_root(self) -> Inode:
         # root inode is always the number 2
         return self.get_inode(2)
 
-    def get_inode(self, idx: int):
+    def get_inode(self, idx: int) -> Inode:
         # the group of the inode
         group_idx, inode_table_entry_idx = self.get_inode_group(idx)
         # location of inode table
         inode_table_offset = self.gdt[group_idx].bg_inode_table_lo * self.sb.get_block_size()
         # location of inode in the inode table
         inode_offset = inode_table_offset + inode_table_entry_idx * self.sb.s_inode_size
-        return Ext4Inode.from_bytes(self.read_bytes(inode_offset, 160))
+        e4inode = Ext4Inode.from_bytes(self.read_bytes(inode_offset, 160))
+        return Inode(idx, inode_offset, e4inode)
 
     def get_inode_group(self, idx: int):
         # return (group_idx, inode_table_entry_idx)
         group_idx = (idx - 1) // self.sb.s_inodes_per_group
         inode_table_entry_idx = (idx - 1) % self.sb.s_inodes_per_group
         return (group_idx, inode_table_entry_idx)
+
+    def iter_dir(self, inode: Inode):
+        if not inode.is_dir:
+            raise ValueError(f'can only iterate over directories')
+        if inode.e4inode.i_flags & 0x1000 != 0:
+            raise NotImplementedError('directory has hashed indexes (EXT4_INDEX_FL)')
+        # TODO: i have no idea for now how to read extends
+        return None
 
 
 if __name__ == "__main__":
@@ -209,4 +267,7 @@ if __name__ == "__main__":
     with Ext4Filesystem(image_file_path) as e4fs:
         e4fs.sb.pretty_print()
         e4fs.gdt[0].pretty_print()
-        e4fs.get_root().pretty_print()
+        root = e4fs.get_root()
+        assert e4fs.get_root().is_dir
+
+        print(root)
