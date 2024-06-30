@@ -6,7 +6,6 @@ import dataclasses
 # --- Constants ---
 
 EXT4MAGIC = 0xEF53
-BLOCKSIZE = 1024
 
 # --- Helpers ---
 
@@ -17,6 +16,24 @@ U8 = 'B'
 
 def read_little_endian(raw: bytes, offset: int, fmt: str) -> int:
     return struct.unpack_from(fmt, raw, offset)[0]
+
+
+class Ext4Struct:
+
+    FIELDS: list[str, int, str]
+    HUMAN_NAME: str
+
+    @classmethod
+    def from_bytes(cls, block: bytes) -> 'Ext4Superblock':
+        kwargs = {}
+        for attr, offset, size in cls.FIELDS:
+            kwargs[attr] = read_little_endian(block, offset, size)
+        return cls(**kwargs)
+
+    def pretty_print(self):
+        print(f'struct {self.HUMAN_NAME}:')
+        for f in dataclasses.fields(self):
+            print(f"  {f.name}: {getattr(self, f.name)}")
 
 # --- Superblock ---
 
@@ -36,11 +53,16 @@ EXT4SUPERBLOCK_FIELDS = [
     ('s_magic', 0x38, LE16),
     ('s_first_ino', 0x54, LE32),
     ('s_inode_size', 0x58, LE32),
+    ('s_desc_size', 0xFE, LE16),
 ]
 
 
 @dataclasses.dataclass
-class Ext4Superblock:
+class Ext4Superblock(Ext4Struct):
+
+    FIELDS = EXT4SUPERBLOCK_FIELDS
+    HUMAN_NAME = 'ext4_super_block'
+
     # NOTE: not all fields implemented
     s_inodes_count: int
     s_blocks_count_lo: int
@@ -55,37 +77,73 @@ class Ext4Superblock:
     s_magic: int
     s_first_ino: int
     s_inode_size: int
+    s_desc_size: int
 
     def __post_init__(self):
         if self.s_magic != EXT4MAGIC:
             raise ValueError(f'no ext4 superblock: invalid magic number {self.s_magic}')
 
-    @classmethod
-    def from_bytes(cls, block: bytes) -> 'Ext4Superblock':
-        kwargs = {}
-        for attr, offset, size in EXT4SUPERBLOCK_FIELDS:
-            kwargs[attr] = read_little_endian(block, offset, size)
-        return cls(**kwargs)
-
-    def pretty_print(self):
-        print('struct ext4_super_block:')
-        for f in dataclasses.fields(self):
-            print(f"  {f.name}: {getattr(self, f.name)}")
-
     def get_block_size(self) -> int:
         return 2 ** (10 + self.s_log_block_size)
 
-    def get_block(self, index, n=1):
-        return self.get_bytes(index * self.conf.get_block_size(), n * self.conf.get_block_size())
+
+EXT4GROUP_DESCRIPTOR_FIELDS = [
+    # attribute, offset, size
+    ('bg_block_bitmap_lo', 0x0, LE32),
+    ('bg_inode_bitmap_lo', 0x4, LE32),
+    ('bg_inode_table_lo', 0x8, LE32),
+    ('bg_block_bitmap_hi', 0x20, LE32),
+    ('bg_inode_bitmap_hi', 0x24, LE32),
+    ('bg_inode_table_hi', 0x28, LE32),
+]
 
 
 @dataclasses.dataclass
-class Ext4BlockGroupDescriptor:
-    pass
+class Ext4GroupDescriptor(Ext4Struct):
+
+    FIELDS = EXT4GROUP_DESCRIPTOR_FIELDS
+    HUMAN_NAME = 'ext4_group_desc'
+
+    bg_block_bitmap_lo: int
+    bg_inode_bitmap_lo: int
+    bg_inode_table_lo: int
+    bg_block_bitmap_hi: int
+    bg_inode_bitmap_hi: int
+    bg_inode_table_hi: int
 
 
-class Ext4Inode:
-    pass
+EXT4INODE_FIELDS = [
+    # attribute, offset, size
+    ('i_mode', 0x0, LE16),
+    ('i_uid', 0x2, LE16),
+    ('i_size_lo', 0x4, LE32),
+    ('i_atime', 0x8, LE32),
+    ('i_ctime', 0xC, LE32),
+    ('i_mtime', 0x10, LE32),
+    ('i_gid', 0x18, LE16),
+    ('i_blocks_lo', 0x1C, LE32),
+    ('i_flags', 0x20, LE32),
+    ('i_size_high', 0x6C, LE32),
+    ('i_extra_isize', 0x80, LE16),
+]
+
+
+@dataclasses.dataclass
+class Ext4Inode(Ext4Struct):
+    FIELDS = EXT4INODE_FIELDS
+    HUMAN_NAME = 'ext4_inode'
+
+    i_mode: int
+    i_uid: int
+    i_size_lo: int
+    i_atime: int
+    i_ctime: int
+    i_mtime: int
+    i_gid: int
+    i_blocks_lo: int
+    i_flags: int
+    i_size_high: int
+    i_extra_isize: int
 
 
 class Ext4Filesystem:
@@ -94,11 +152,14 @@ class Ext4Filesystem:
         self.path = path
         self.fd = None
         self.sb = None
+        self.gdt: list[Ext4GroupDescriptor] = []
 
     def __enter__(self):
         self.fd = open(self.path, 'rb')
-        # first block is empty (boot block)
-        self.sb = Ext4Superblock.from_bytes(self.read_bytes(BLOCKSIZE, BLOCKSIZE))
+        # boot block is empty (1024 bytes)
+        self.sb = Ext4Superblock.from_bytes(self.read_bytes(1024, 4096))
+        # load the group descriptor table
+        self.read_gdt()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -112,13 +173,33 @@ class Ext4Filesystem:
     def read_blocks(self, i, n):
         return self.read_bytes(i * self.sb.get_block_size(), n * self.sb.get_block_size())
 
-    def read_bgd(self, block_group):
-        # TODO: is this correct?
-        bgd_size = 32
-        superblock_size = 1
-        block_no = superblock_size + (block_group // bgd_per_block)
-        offset_in_block = bg_no % bgd_per_block * bgd_size
-        bgd_pos = block_no * self.conf.get_block_size() + offset_in_block
+    def read_gdt(self):
+        num_groups = self.sb.s_inodes_count // self.sb.s_inodes_per_group
+        # the group descriptor table is found in the block following the super block
+        group_desc_table_offset = self.sb.get_block_size()
+        for idx in range(num_groups):
+            group_desc_offset = group_desc_table_offset + idx * self.sb.s_desc_size
+            # the group descriptor has has a size of 64 bytes (on 64bit at least)
+            self.gdt.append(Ext4GroupDescriptor.from_bytes(self.read_bytes(group_desc_offset, 64)))
+
+    def get_root(self):
+        # root inode is always the number 2
+        return self.get_inode(2)
+
+    def get_inode(self, idx: int):
+        # the group of the inode
+        group_idx, inode_table_entry_idx = self.get_inode_group(idx)
+        # location of inode table
+        inode_table_offset = self.gdt[group_idx].bg_inode_table_lo * self.sb.get_block_size()
+        # location of inode in the inode table
+        inode_offset = inode_table_offset + inode_table_entry_idx * self.sb.s_inode_size
+        return Ext4Inode.from_bytes(self.read_bytes(inode_offset, 160))
+
+    def get_inode_group(self, idx: int):
+        # return (group_idx, inode_table_entry_idx)
+        group_idx = (idx - 1) // self.sb.s_inodes_per_group
+        inode_table_entry_idx = (idx - 1) % self.sb.s_inodes_per_group
+        return (group_idx, inode_table_entry_idx)
 
 
 if __name__ == "__main__":
@@ -127,3 +208,5 @@ if __name__ == "__main__":
 
     with Ext4Filesystem(image_file_path) as e4fs:
         e4fs.sb.pretty_print()
+        e4fs.gdt[0].pretty_print()
+        e4fs.get_root().pretty_print()
