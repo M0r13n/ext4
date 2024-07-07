@@ -300,7 +300,30 @@ class Ext4Extent(Ext4Struct):
     ee_start_lo: int
 
 
+@dataclasses.dataclass
+class Ext4DirEntry2(Ext4Struct):
+    FIELDS = [
+        ('inode', 0x0, LE32),
+        ('rec_len', 0x4, LE16),
+        ('name_len', 0x6, U8),
+        ('file_type', 0x7, U8),
+    ]
+    HUMAN_NAME = 'ext4_dir_entry_2'
+
+    inode: int
+    rec_len: int
+    name_len: int
+    file_type: int
+    name: str = dataclasses.field(init=False)
+
+    @classmethod
+    def from_bytes(cls: typing.Type[T], data: bytes) -> T:
+        de = super().from_bytes(data[:8])
+        de.name = data[8: 8 + de.name_len]
+        return de
+
 # Files
+
 
 class Ext4InodeFlags:
     EXT4_EXTENTS_FL = 0x80000
@@ -374,11 +397,19 @@ if __name__ == "__main__":
         root = e4fs.get_root()
         assert e4fs.get_root().is_dir
 
+        bs = ByteStream.create(root, e4fs)
+        data = bs.read()
+        assert len(data) == e4fs.sb.get_block_size()
+
+        # a directory is more or less a flat file that maps an arbitrary byte string (usually ASCII) to an inode number on the filesystem
         # EXT4_INDEX_FL: has hashed indexes. linear otherwise.
         is_hashed = root.e4inode.i_flags & 0x1000 != 0
         print(is_hashed)
 
-        bs = ByteStream.create(root, e4fs)
-        data = bs.read()
-        assert len(data) == e4fs.sb.get_block_size()
-        print(data)
+        # NOTE: directory entries are not split across filesystem blocks!
+        for block in bs.read_blocks():
+            while block:
+                de = Ext4DirEntry2.from_bytes(block)
+                block = block[de.rec_len:]
+                if de.inode == 0:
+                    break
