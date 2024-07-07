@@ -1,8 +1,9 @@
-# https://www.kernel.org/doc/html/latest/filesystems/ext4/globals.html#super-block
 #!/usr/bin/env python3
+import abc
 import enum
 import struct
 import dataclasses
+import typing
 
 # --- Constants ---
 
@@ -19,13 +20,16 @@ def read_little_endian(raw: bytes, offset: int, fmt: str) -> int:
     return struct.unpack_from(fmt, raw, offset)[0]
 
 
+T = typing.TypeVar('T', bound='Ext4Struct')
+
+
 class Ext4Struct:
 
     FIELDS: list[str, int, str]
     HUMAN_NAME: str
 
     @classmethod
-    def from_bytes(cls, block: bytes) -> 'Ext4Superblock':
+    def from_bytes(cls: typing.Type[T], block: bytes) -> T:
         kwargs = {}
         for attr, offset, size in cls.FIELDS:
             kwargs[attr] = read_little_endian(block, offset, size)
@@ -124,6 +128,7 @@ EXT4INODE_FIELDS = [
     ('i_gid', 0x18, LE16),
     ('i_blocks_lo', 0x1C, LE32),
     ('i_flags', 0x20, LE32),
+    ('i_block', 0x28, '60s'),  # 60 bytes
     ('i_size_high', 0x6C, LE32),
     ('i_extra_isize', 0x80, LE16),
 ]
@@ -171,6 +176,7 @@ class Ext4Inode(Ext4Struct):
     i_gid: int
     i_blocks_lo: int
     i_flags: int
+    i_block: bytes
     i_size_high: int
     i_extra_isize: int
 
@@ -253,11 +259,109 @@ class Ext4Filesystem:
 
     def iter_dir(self, inode: Inode):
         if not inode.is_dir:
-            raise ValueError(f'can only iterate over directories')
+            raise ValueError('can only iterate over directories')
         if inode.e4inode.i_flags & 0x1000 != 0:
             raise NotImplementedError('directory has hashed indexes (EXT4_INDEX_FL)')
-        # TODO: i have no idea for now how to read extends
+        # TODO: i have no idea for now how to read extents
         return None
+
+
+@dataclasses.dataclass
+class Ext4ExtentHeader(Ext4Struct):
+    FIELDS = [
+        ('eh_magic', 0x0, LE16),
+        ('eh_entries', 0x2, LE16),
+        ('eh_max', 0x4, LE16),
+        ('eh_depth', 0x6, LE16),
+        ('eh_generation', 0x8, LE32),
+    ]
+    HUMAN_NAME = 'ext4_extent_header'
+
+    eh_magic: int
+    eh_entries: int
+    eh_max: int
+    eh_depth: int
+    eh_generation: int
+
+
+@dataclasses.dataclass
+class Ext4Extent(Ext4Struct):
+    FIELDS = [
+        ('ee_block', 0x0, LE32),
+        ('ee_len', 0x4, LE16),
+        ('ee_start_hi', 0x6, LE16),
+        ('ee_start_lo', 0x8, LE32),
+    ]
+    HUMAN_NAME = 'ext4_extent'
+
+    ee_block: int
+    ee_len: int
+    ee_start_hi: int
+    ee_start_lo: int
+
+
+# Files
+
+class Ext4InodeFlags:
+    EXT4_EXTENTS_FL = 0x80000
+    EXT4_INLINE_DATA_FL = 0x10000000
+
+
+class ByteStream(abc.ABC):
+
+    def __init__(self, inode: Inode, fs: Ext4Filesystem) -> None:
+        self.inode = inode
+        self.fs = fs
+
+    @staticmethod
+    def create(inode: Inode, fs: Ext4Filesystem) -> 'ByteStream':
+        if inode.e4inode.i_flags & Ext4InodeFlags.EXT4_EXTENTS_FL != 0:
+            return ExtentByteStream(inode, fs)
+        elif inode.e4inode.i_flags & Ext4InodeFlags.EXT4_INLINE_DATA_FL != 0:
+            return InlineByteStream(inode, fs)
+        else:
+            raise ValueError('can only read extents or inline data')
+
+    @abc.abstractmethod
+    def iter_blocks(self):
+        pass
+
+    def read_blocks(self, blocks: int = -1):
+        """Read consecutive blocks as bytes"""
+        for i, block_no in enumerate(self.iter_blocks()):
+            if blocks != -1 and i >= blocks:
+                return
+            yield self.fs.read_blocks(block_no, 1)
+
+    def read(self):
+        return b"".join(self.read_blocks(-1))
+
+
+class ExtentByteStream(ByteStream):
+
+    def iter_blocks(self):
+        """Yield consecutive number of blocks for this extent.
+        e.g.: [15, 16, 17, ...]"""
+        # first 12 bytes are the extent header
+        header = Ext4ExtentHeader.from_bytes(root.e4inode.i_block[:12])
+        if header.eh_depth == 0:
+            # is leaf
+            for i in range(1, min(header.eh_entries + 1, 5)):
+                extent = Ext4Extent.from_bytes(root.e4inode.i_block[i * 12:(i + 1) * 12])
+                assert extent.ee_len <= 32768, "extent uninitialized"
+                for block_no in range(extent.ee_len):
+                    yield extent.ee_start_lo + block_no
+        else:
+            # TODO: support the actual tree structure of extents
+            raise NotImplementedError('extent trees can not yet be traversed')
+
+
+class InlineByteStream(ByteStream):
+    pass
+
+
+class Directory:
+    pass
 
 
 if __name__ == "__main__":
@@ -270,4 +374,11 @@ if __name__ == "__main__":
         root = e4fs.get_root()
         assert e4fs.get_root().is_dir
 
-        print(root)
+        # EXT4_INDEX_FL: has hashed indexes. linear otherwise.
+        is_hashed = root.e4inode.i_flags & 0x1000 != 0
+        print(is_hashed)
+
+        bs = ByteStream.create(root, e4fs)
+        data = bs.read()
+        assert len(data) == e4fs.sb.get_block_size()
+        print(data)
