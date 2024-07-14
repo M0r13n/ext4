@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import abc
+import datetime
 import enum
+from itertools import repeat
 import struct
 import dataclasses
 import typing
@@ -181,13 +183,28 @@ class Ext4Inode(Ext4Struct):
     i_extra_isize: int
 
 
+class Ext4Permission(enum.IntEnum):
+    S_IXOTH = 0x1
+    S_IWOTH = 0x2
+    S_IROTH = 0x4
+
+    S_IXGRP = 0x8
+    S_IWGRP = 0x10
+    S_IRGRP = 0x20
+
+    S_IXUSR = 0x40
+    S_IWUSR = 0x80
+    S_IRUSR = 0x100
+
+
 class Inode:
 
-    def __init__(self, i_num: int, offset: int, e4inode: Ext4Inode) -> None:
+    def __init__(self, i_num: int, offset: int, e4inode: Ext4Inode, filesystem: 'Ext4Filesystem') -> None:
         self.i_num = i_num
         self.offset = offset
         self.e4inode = e4inode
         self.file_type = InodeFileType.from_raw(e4inode.i_mode)
+        self.filesystem = filesystem
 
     def __repr__(self):
         return f'Inode(i_num={self.i_num}, offset={self.offset})'
@@ -199,6 +216,31 @@ class Inode:
     @property
     def is_dir(self):
         return self.file_type == InodeFileType.S_IFDIR
+
+    def read(self):
+        bs = ByteStream.create(root, e4fs)
+        return bs.read()
+
+    def iter(self) -> typing.Generator['Ext4DirEntry2', None, None]:
+        if not self.is_dir:
+            raise TypeError('can only iterate directories')
+
+        # a directory is more or less a flat file that maps an arbitrary byte string (usually ASCII) to an inode number on the filesystem
+        # EXT4_INDEX_FL: has hashed indexes. linear otherwise.
+        if self.e4inode.i_flags & 0x1000 != 0:
+            raise NotImplementedError('hashed directories not supported yet')
+
+        bs = ByteStream.create(root, e4fs)
+
+        # NOTE: directory entries are not split across filesystem blocks!
+        for block in bs.read_blocks():
+            while block:
+                de = Ext4DirEntry2.from_bytes(block)
+                if de.inode != 0:
+                    yield de
+                block = block[de.rec_len:]
+                if de.inode == 0:
+                    break
 
 
 class Ext4Filesystem:
@@ -249,7 +291,7 @@ class Ext4Filesystem:
         # location of inode in the inode table
         inode_offset = inode_table_offset + inode_table_entry_idx * self.sb.s_inode_size
         e4inode = Ext4Inode.from_bytes(self.read_bytes(inode_offset, 160))
-        return Inode(idx, inode_offset, e4inode)
+        return Inode(idx, inode_offset, e4inode, self)
 
     def get_inode_group(self, idx: int):
         # return (group_idx, inode_table_entry_idx)
@@ -383,33 +425,49 @@ class InlineByteStream(ByteStream):
     pass
 
 
-class Directory:
-    pass
+def human_mode(mode):
+    mode_string = ''
+    fields = (
+        Ext4Permission.S_IRUSR,
+        Ext4Permission.S_IWUSR,
+        Ext4Permission.S_IXUSR,
+        Ext4Permission.S_IRGRP,
+        Ext4Permission.S_IWGRP,
+        Ext4Permission.S_IXGRP,
+        Ext4Permission.S_IROTH,
+        Ext4Permission.S_IWOTH,
+        Ext4Permission.S_IXOTH,
+    )
+    for mask, char in zip(fields, 'rwxrwxrwx'):
+        if mode & mask != 0:
+            mode_string += char
+        else:
+            mode_string += '-'
+    return mode_string
+
+
+def ls(root: Inode):
+    for entry in root.iter():
+        # .rwxrwxrwx root root 12301 Jul 13 11:01 test.file
+        inode = root.filesystem.get_inode(entry.inode)
+        prefix = 'd' if inode.is_dir else '.'
+        mode = human_mode(inode.e4inode.i_mode)
+        size = inode.e4inode.i_size_high << 32 | inode.e4inode.i_size_lo
+        mtime = datetime.datetime.fromtimestamp(inode.e4inode.i_mtime)
+
+        print(f'{prefix}{mode} {inode.e4inode.i_uid} {inode.e4inode.i_gid} {size} {mtime.isoformat()} {entry.name.decode()}')
 
 
 if __name__ == "__main__":
     # Path to the image file
     image_file_path = 'ext4.img'
+    # image_file_path = '/dev/block/252:1'
 
     with Ext4Filesystem(image_file_path) as e4fs:
-        e4fs.sb.pretty_print()
-        e4fs.gdt[0].pretty_print()
+        # e4fs.sb.pretty_print()
+        # e4fs.gdt[0].pretty_print()
         root = e4fs.get_root()
         assert e4fs.get_root().is_dir
 
-        bs = ByteStream.create(root, e4fs)
-        data = bs.read()
-        assert len(data) == e4fs.sb.get_block_size()
-
-        # a directory is more or less a flat file that maps an arbitrary byte string (usually ASCII) to an inode number on the filesystem
-        # EXT4_INDEX_FL: has hashed indexes. linear otherwise.
-        is_hashed = root.e4inode.i_flags & 0x1000 != 0
-        print(is_hashed)
-
-        # NOTE: directory entries are not split across filesystem blocks!
-        for block in bs.read_blocks():
-            while block:
-                de = Ext4DirEntry2.from_bytes(block)
-                block = block[de.rec_len:]
-                if de.inode == 0:
-                    break
+        # ls like iteration
+        ls(root)
