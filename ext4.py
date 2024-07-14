@@ -217,8 +217,12 @@ class Inode:
     def is_dir(self):
         return self.file_type == InodeFileType.S_IFDIR
 
+    @property
+    def size(self):
+        return self.e4inode.i_size_high << 32 | self.e4inode.i_size_lo
+
     def read(self):
-        bs = ByteStream.create(root, e4fs)
+        bs = ByteStream.create(self)
         return bs.read()
 
     def iter(self) -> typing.Generator['Ext4DirEntry2', None, None]:
@@ -230,7 +234,7 @@ class Inode:
         if self.e4inode.i_flags & 0x1000 != 0:
             raise NotImplementedError('hashed directories not supported yet')
 
-        bs = ByteStream.create(root, e4fs)
+        bs = ByteStream.create(self)
 
         # NOTE: directory entries are not split across filesystem blocks!
         for block in bs.read_blocks():
@@ -374,16 +378,15 @@ class Ext4InodeFlags:
 
 class ByteStream(abc.ABC):
 
-    def __init__(self, inode: Inode, fs: Ext4Filesystem) -> None:
+    def __init__(self, inode: Inode) -> None:
         self.inode = inode
-        self.fs = fs
 
     @staticmethod
-    def create(inode: Inode, fs: Ext4Filesystem) -> 'ByteStream':
+    def create(inode: Inode) -> 'ByteStream':
         if inode.e4inode.i_flags & Ext4InodeFlags.EXT4_EXTENTS_FL != 0:
-            return ExtentByteStream(inode, fs)
+            return ExtentByteStream(inode)
         elif inode.e4inode.i_flags & Ext4InodeFlags.EXT4_INLINE_DATA_FL != 0:
-            return InlineByteStream(inode, fs)
+            return InlineByteStream(inode)
         else:
             raise ValueError('can only read extents or inline data')
 
@@ -393,10 +396,24 @@ class ByteStream(abc.ABC):
 
     def read_blocks(self, blocks: int = -1):
         """Read consecutive blocks as bytes"""
+        end = self.inode.size
+        block_size = self.inode.filesystem.sb.get_block_size()
+        bytes_read = 0
+
         for i, block_no in enumerate(self.iter_blocks()):
             if blocks != -1 and i >= blocks:
                 return
-            yield self.fs.read_blocks(block_no, 1)
+            block_data = self.inode.filesystem.read_blocks(block_no, 1)
+            bytes_to_yield = min(block_size, end - bytes_read)
+
+            if bytes_read + bytes_to_yield > end:
+                bytes_to_yield = end - bytes_read
+
+            yield block_data[:bytes_to_yield]
+            bytes_read += bytes_to_yield
+
+            if bytes_read >= end:
+                return
 
     def read(self):
         return b"".join(self.read_blocks(-1))
@@ -408,11 +425,11 @@ class ExtentByteStream(ByteStream):
         """Yield consecutive number of blocks for this extent.
         e.g.: [15, 16, 17, ...]"""
         # first 12 bytes are the extent header
-        header = Ext4ExtentHeader.from_bytes(root.e4inode.i_block[:12])
+        header = Ext4ExtentHeader.from_bytes(self.inode.e4inode.i_block[:12])
         if header.eh_depth == 0:
             # is leaf
             for i in range(1, min(header.eh_entries + 1, 5)):
-                extent = Ext4Extent.from_bytes(root.e4inode.i_block[i * 12:(i + 1) * 12])
+                extent = Ext4Extent.from_bytes(self.inode.e4inode.i_block[i * 12:(i + 1) * 12])
                 assert extent.ee_len <= 32768, "extent uninitialized"
                 for block_no in range(extent.ee_len):
                     yield extent.ee_start_lo + block_no
@@ -458,7 +475,13 @@ def ls(root: Inode):
         print(f'{prefix}{mode} {inode.e4inode.i_uid} {inode.e4inode.i_gid} {size} {mtime.isoformat()} {entry.name.decode()}')
 
 
-if __name__ == "__main__":
+def cat(root: Inode):
+    if not root.is_file:
+        raise TypeError('can only cat files')
+    print(root.read().decode(), end='')
+
+
+def main():
     # Path to the image file
     image_file_path = 'ext4.img'
     # image_file_path = '/dev/block/252:1'
@@ -471,3 +494,12 @@ if __name__ == "__main__":
 
         # ls like iteration
         ls(root)
+
+        for de in root.iter():
+            inode = e4fs.get_inode(de.inode)
+            if inode.is_file:
+                cat(inode)
+
+
+if __name__ == "__main__":
+    main()
