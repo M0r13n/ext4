@@ -347,6 +347,22 @@ class Ext4Extent(Ext4Struct):
 
 
 @dataclasses.dataclass
+class Ext4ExtentIdx(Ext4Struct):
+    FIELDS = [
+        ("ee_block", 0x0, LE32),
+        ("ei_leaf_lo", 0x4, LE32),
+        ("ei_leaf_hi", 0x8, LE16),
+        ("ei_unused", 0x0, LE16)
+    ]
+    HUMAN_NAME = 'ext4_extent_idx'
+
+    ee_block: int
+    ei_leaf_lo: int
+    ei_leaf_hi: int
+    ei_unused: int
+
+
+@dataclasses.dataclass
 class Ext4DirEntry2(Ext4Struct):
     FIELDS = [
         ('inode', 0x0, LE32),
@@ -426,6 +442,7 @@ class ExtentByteStream(ByteStream):
         e.g.: [15, 16, 17, ...]"""
         # first 12 bytes are the extent header
         header = Ext4ExtentHeader.from_bytes(self.inode.e4inode.i_block[:12])
+        assert header.eh_magic == 0xF30A
         if header.eh_depth == 0:
             # is leaf
             for i in range(1, min(header.eh_entries + 1, 5)):
@@ -435,7 +452,25 @@ class ExtentByteStream(ByteStream):
                     yield extent.ee_start_lo + block_no
         else:
             # TODO: support the actual tree structure of extents
-            raise NotImplementedError('extent trees can not yet be traversed')
+            indices = []
+            for i in range(1, header.eh_entries + 1):
+                idx = Ext4ExtentIdx.from_bytes(self.inode.e4inode.i_block[i * 12:(i + 1) * 12])
+                indices.append(idx)
+
+            for idx in indices:
+                block_idx = idx.ei_leaf_lo * self.inode.filesystem.sb.get_block_size()
+                block = self.inode.filesystem.read_bytes(block_idx, self.inode.filesystem.sb.get_block_size())
+                header = Ext4ExtentHeader.from_bytes(block)
+                if header.eh_depth != 0:
+                    raise ValueError('todo: recurse')
+
+                for i in range(1, header.eh_entries + 1):
+                    extent = Ext4Extent.from_bytes(block[i * 12:(i + 1) * 12])
+                    if extent.ee_len > 32768:
+                        # extent uninitialized
+                        continue
+                    for block_no in range(extent.ee_len):
+                        yield extent.ee_start_lo + block_no
 
 
 class InlineByteStream(ByteStream):
@@ -495,10 +530,11 @@ def main():
         # ls like iteration
         ls(root)
 
-        for de in root.iter():
-            inode = e4fs.get_inode(de.inode)
-            if inode.is_file:
-                cat(inode)
+        last = list(root.iter())[-1]
+        inode = e4fs.get_inode(last.inode)
+        content = inode.read().decode()
+        print(content[-100:])
+        print(len(content))
 
 
 if __name__ == "__main__":
