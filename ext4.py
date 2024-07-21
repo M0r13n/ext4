@@ -254,13 +254,20 @@ class Ext4Filesystem:
         self.fd = None
         self.sb = None
         self.gdt: list[Ext4GroupDescriptor] = []
+        self.init()
 
-    def __enter__(self):
+    def init(self):
         self.fd = open(self.path, 'rb')
         # boot block is empty (1024 bytes)
         self.sb = Ext4Superblock.from_bytes(self.read_bytes(1024, 4096))
         # load the group descriptor table
         self.read_gdt()
+
+    def close(self):
+        self.fd.close()
+        del self.fd
+
+    def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -440,6 +447,7 @@ class ExtentByteStream(ByteStream):
     def iter_blocks(self):
         """Yield consecutive number of blocks for this extent.
         e.g.: [15, 16, 17, ...]"""
+
         def traverse_extent_tree(block_data, depth):
             header = Ext4ExtentHeader.from_bytes(block_data[:12])
             assert header.eh_magic == 0xF30A
@@ -516,10 +524,7 @@ def main():
     # image_file_path = '/dev/block/252:1'
 
     with Ext4Filesystem(image_file_path) as e4fs:
-        # e4fs.sb.pretty_print()
-        # e4fs.gdt[0].pretty_print()
         root = e4fs.get_root()
-        assert e4fs.get_root().is_dir
 
         # ls like iteration
         ls(root)
