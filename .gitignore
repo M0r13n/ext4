@@ -1,2 +1,4 @@
 *.img
 test.py
+*.pyc
+__pycache__

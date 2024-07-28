@@ -2,7 +2,6 @@
 import abc
 import datetime
 import enum
-from itertools import repeat
 import struct
 import dataclasses
 import typing
@@ -516,25 +515,3 @@ def cat(root: Inode):
     if not root.is_file:
         raise TypeError('can only cat files')
     print(root.read().decode(), end='')
-
-
-def main():
-    # Path to the image file
-    image_file_path = 'ext4.img'
-    # image_file_path = '/dev/block/252:1'
-
-    with Ext4Filesystem(image_file_path) as e4fs:
-        root = e4fs.get_root()
-
-        # ls like iteration
-        ls(root)
-
-        last = list(root.iter())[-1]
-        inode = e4fs.get_inode(last.inode)
-        content = inode.read().decode()
-        print(content[-100:])
-        print(len(content))
-
-
-if __name__ == "__main__":
-    main()
