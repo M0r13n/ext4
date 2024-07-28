@@ -84,10 +84,9 @@ class LargeFileReadTestCase(BaseTestCase):
 
     def test_that_a_large_file_can_be_read(self):
 
-        with open(self.FILES[0], 'w') as fd:
-            fd.truncate(500000000)
-            fd.seek(500000000)
-            fd.write('Banana!')
+        with open(self.FILES[0], 'wb') as fd:
+            fd.write(b'\x00' * 500000000)
+            fd.write(b'Banana!')
             fd.flush()
             os.sync()
 
@@ -98,7 +97,7 @@ class LargeFileReadTestCase(BaseTestCase):
         content = inode.read().decode()
 
         self.assertEqual(inode.size, 500000007)
-        self.assertEqual(content[-20:], "Banana!")
+        self.assertEqual(content[-7:], "Banana!")
 
 
 # Utils
