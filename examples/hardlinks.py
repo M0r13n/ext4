@@ -3,12 +3,7 @@ import os
 import pathlib
 import sys
 
-
-try:
-    sys.path.append(pathlib.Path(__file__).parent.parent.as_posix())
-    from ext4 import Ext4Filesystem, ls, cat
-except ImportError:
-    raise
+from ext4 import Ext4Filesystem, ls, cat
 
 
 def make_hardlink():

@@ -1,0 +1,15 @@
+[project]
+name = "ext4"
+requires-python = ">=3.10"
+version = "0.0.0"
+authors = [
+  {name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" }
+]
+maintainers = [
+   {name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" }]
+
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=43.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
