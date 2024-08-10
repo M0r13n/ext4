@@ -26,7 +26,7 @@ T = typing.TypeVar('T', bound='Ext4Struct')
 
 class Ext4Struct:
 
-    FIELDS: list[str, int, str]
+    FIELDS: list[tuple[str, int, str]]
     HUMAN_NAME: str
 
     @classmethod
@@ -118,6 +118,69 @@ class Ext4GroupDescriptor(Ext4Struct):
     bg_inode_table_hi: int
 
 
+@dataclasses.dataclass
+class Ext4XattrHeader(Ext4Struct):
+    FIELDS = [
+        ('h_magic', 0x0, LE32),
+        ('h_refcount', 0x4, LE32),
+        ('h_blocks', 0x8, LE32),
+        ('h_hash', 0xC, LE32),
+        ('h_checksum', 0x10, LE32),
+        ('h_reserved', 0x14, LE32),
+    ]
+    HUMAN_NAME = 'ext4_xattr_header'
+
+    h_magic: int
+    h_refcount: int
+    h_blocks: int
+    h_hash: int
+    h_checksum: int
+    h_reserved: int
+
+
+@dataclasses.dataclass
+class Ext4XattrEntry(Ext4Struct):
+    FIELDS = [
+        ('e_name_len', 0x0, U8),
+        ('e_name_index', 0x1, U8),
+        ('e_value_offs', 0x2, LE16),
+        ('e_value_inum', 0x4, LE32),
+        ('e_value_size', 0x8, LE32),
+        ('e_hash', 0xC, LE32),
+    ]
+    HUMAN_NAME = 'ext4_xattr_entry'
+
+    e_name_len: int
+    e_name_index: int
+    e_value_offs: int
+    e_value_inum: int
+    e_value_size: int
+    e_hash: int
+    e_name: bytes = dataclasses.field(default=b'NA')
+    value: bytes = dataclasses.field(default=b'NA')
+
+    @property
+    def name(self) -> str:
+        return EXT4_XATTR_PREFIXES[self.e_name_index] + self.e_name.decode()
+
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}({self.name}={self.value})"
+
+    def __bool__(self) -> bool:
+        return bool(self.e_name_len | self.e_name_index | self.e_value_offs | self.e_value_inum)
+
+
+EXT4_XATTR_PREFIXES = {
+    0: "",
+    1: "user.",
+    2: "system.posix_acl_access",
+    3: "system.posix_acl_default",
+    4: "trusted.",
+    6: "security.",
+    7: "system.",
+    8: "system.richacl"
+}
+
 EXT4INODE_FIELDS = [
     # attribute, offset, size
     ('i_mode', 0x0, LE16),
@@ -130,6 +193,7 @@ EXT4INODE_FIELDS = [
     ('i_blocks_lo', 0x1C, LE32),
     ('i_flags', 0x20, LE32),
     ('i_block', 0x28, '60s'),  # 60 bytes
+    ('i_file_acl_lo', 0x68, LE32),
     ('i_size_high', 0x6C, LE32),
     ('i_extra_isize', 0x80, LE16),
 ]
@@ -178,6 +242,7 @@ class Ext4Inode(Ext4Struct):
     i_blocks_lo: int
     i_flags: int
     i_block: bytes
+    i_file_acl_lo: int
     i_size_high: int
     i_extra_isize: int
 
@@ -249,17 +314,15 @@ class Inode:
 class Ext4Filesystem:
 
     def __init__(self, path: str) -> None:
+        # open raw image
         self.path = path
-        self.fd = None
-        self.sb = None
-        self.gdt: list[Ext4GroupDescriptor] = []
-        self.init()
-
-    def init(self):
         self.fd = open(self.path, 'rb')
+
         # boot block is empty (1024 bytes)
         self.sb = Ext4Superblock.from_bytes(self.read_bytes(1024, 4096))
+
         # load the group descriptor table
+        self.gdt: list[Ext4GroupDescriptor] = []
         self.read_gdt()
 
     def close(self):
@@ -314,8 +377,40 @@ class Ext4Filesystem:
             raise ValueError('can only iterate over directories')
         if inode.e4inode.i_flags & 0x1000 != 0:
             raise NotImplementedError('directory has hashed indexes (EXT4_INDEX_FL)')
-        # TODO: i have no idea for now how to read extents
         return None
+
+    def get_xattrs(self, inode: Inode) -> typing.Generator[Ext4XattrEntry, None, None]:
+        # two places
+        # end of each inode entry and the beginning of the next inode entry
+        # inode.i_extra_isize = 28 and sb.inode_size = 256, then there are 256 - (128 + 28) = 100 bytes for this
+        # second: y inode.i_file_acl
+        avail = self.sb.s_inode_size - (128 + inode.e4inode.i_extra_isize)
+        data = self.read_bytes(inode.offset + 128 + inode.e4inode.i_extra_isize, avail)
+        assert data[0:4] == b"\x00\x00\x02\xea"  # magic number: 0xEA020000 (ext4_xattr_ibody_header)
+
+        i = 4
+        while i < len(data):
+            xattr = Ext4XattrEntry.from_bytes(data[i:])
+            xattr.e_name = data[0x10 + i: 0x10 + i + xattr.e_name_len]
+
+            if not xattr:
+                # end of xattr list
+                return
+
+            # extract name (null terminated)
+            j = -1
+            for j, b in enumerate(data[0x4 + xattr.e_value_offs:]):
+                if b == 0:
+                    break
+
+            if j == -1:
+                raise ValueError('xattr not null terminated')
+
+            xattr.value = data[0x4 + xattr.e_value_offs:0x4 + xattr.e_value_offs + j]
+
+            yield xattr
+
+            i += (16 + xattr.e_name_len + 1)  # size of Ext4XattrEntry (last byte is null termination)
 
 
 @dataclasses.dataclass
