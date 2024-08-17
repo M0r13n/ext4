@@ -5,6 +5,7 @@ import enum
 import struct
 import dataclasses
 import typing
+import math
 
 # --- Constants ---
 
@@ -380,37 +381,47 @@ class Ext4Filesystem:
         return None
 
     def get_xattrs(self, inode: Inode) -> typing.Generator[Ext4XattrEntry, None, None]:
-        # two places
-        # end of each inode entry and the beginning of the next inode entry
-        # inode.i_extra_isize = 28 and sb.inode_size = 256, then there are 256 - (128 + 28) = 100 bytes for this
-        # second: y inode.i_file_acl
+        # Read extended attributes (xattrs) for this inode.
+        def read(data: bytes, i: int) -> typing.Generator[Ext4XattrEntry, None, None]:
+            while i < len(data):
+                xattr = Ext4XattrEntry.from_bytes(data[i:])
+                xattr.e_name = data[0x10 + i: 0x10 + i + xattr.e_name_len]
+
+                if not xattr:
+                    # End of xattr list
+                    return
+
+                # Extract name (null terminated)
+                j = -1
+                for j, b in enumerate(data[xattr.e_value_offs:xattr.e_value_offs + xattr.e_value_size + 1]):
+                    if b == 0:
+                        break
+
+                if j == -1:
+                    raise ValueError('xattr not null terminated')
+
+                xattr.value = data[xattr.e_value_offs: xattr.e_value_offs + j]
+
+                yield xattr
+
+                # Calculate the entry size and round up to the nearest 4-byte boundary
+                entry_size = 16 + xattr.e_name_len + 1  # base size + name + null terminator
+                entry_size_aligned = math.ceil(entry_size / 4) * 4
+                i += entry_size_aligned
+
+        # There are two places where extended attributes can be found.
+        # The first place is between the end of each inode entry and the beginning of the next inode entry.
+        # Calculate the available bytes for in-inode storage.
         avail = self.sb.s_inode_size - (128 + inode.e4inode.i_extra_isize)
         data = self.read_bytes(inode.offset + 128 + inode.e4inode.i_extra_isize, avail)
         assert data[0:4] == b"\x00\x00\x02\xea"  # magic number: 0xEA020000 (ext4_xattr_ibody_header)
+        yield from read(data[4:], 0)
 
-        i = 4
-        while i < len(data):
-            xattr = Ext4XattrEntry.from_bytes(data[i:])
-            xattr.e_name = data[0x10 + i: 0x10 + i + xattr.e_name_len]
-
-            if not xattr:
-                # end of xattr list
-                return
-
-            # extract name (null terminated)
-            j = -1
-            for j, b in enumerate(data[0x4 + xattr.e_value_offs:]):
-                if b == 0:
-                    break
-
-            if j == -1:
-                raise ValueError('xattr not null terminated')
-
-            xattr.value = data[0x4 + xattr.e_value_offs:0x4 + xattr.e_value_offs + j]
-
-            yield xattr
-
-            i += (16 + xattr.e_name_len + 1)  # size of Ext4XattrEntry (last byte is null termination)
+        # The second place where extended attributes can be found is pointed to by inode.i_file_acl.
+        data = self.read_blocks(inode.e4inode.i_file_acl_lo, 1)
+        header = Ext4XattrHeader.from_bytes(data)
+        assert header.h_magic == 0xEA020000
+        yield from read(data, 32)
 
 
 @dataclasses.dataclass
@@ -477,12 +488,12 @@ class Ext4DirEntry2(Ext4Struct):
     rec_len: int
     name_len: int
     file_type: int
-    name: str = dataclasses.field(init=False)
+    name: bytes = dataclasses.field(init=False)
 
     @classmethod
-    def from_bytes(cls: typing.Type[T], data: bytes) -> T:
-        de = super().from_bytes(data[:8])
-        de.name = data[8: 8 + de.name_len]
+    def from_bytes(cls: typing.Type[T], block: bytes) -> T:
+        de = super().from_bytes(block[:8])
+        de.name = block[8: 8 + de.name_len]
         return de
 
 # Files

@@ -14,9 +14,11 @@ def create_file_with_xattrs() -> pathlib.Path:
     # Verify with: getfattr -d -m '' /mnt/ext4/file.xattr
     file = MNT_POINT.joinpath('file.xattr')
     file.touch()
-    os.setxattr(file, 'user.comment', b'Hello, World!')
+    os.setxattr(file, 'user.comment', b'Hello, World!!')
     os.setxattr(file, 'user.comment_2', b'Foo Foo')
     os.setxattr(file, 'user.comment_3', b'42')
+    os.setxattr(file, 'user.blablabla', b'This is a xattr')
+    os.sync()
     return file
 
 

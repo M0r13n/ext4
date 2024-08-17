@@ -6,7 +6,7 @@ import unittest
 
 from ext4 import Ext4Filesystem
 
-EXT4_IMG_PATH = pathlib.Path(__file__).parent.joinpath('ext4.img')
+EXT4_IMG_PATH = pathlib.Path(__file__).parent.parent.joinpath('ext4.img')
 EXT4_MNT_PATH = pathlib.Path('/mnt/ext4')
 
 
