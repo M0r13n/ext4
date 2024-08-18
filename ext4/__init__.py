@@ -10,6 +10,7 @@ import math
 # --- Constants ---
 
 EXT4MAGIC = 0xEF53
+EXT4_EA_INODE_FL = 0x200000
 
 # --- Helpers ---
 
@@ -129,7 +130,6 @@ class Ext4XattrHeader(Ext4Struct):
         ('h_checksum', 0x10, LE32),
         ('h_reserved', 0x14, LE32),
     ]
-    HUMAN_NAME = 'ext4_xattr_header'
 
     h_magic: int
     h_refcount: int
@@ -168,7 +168,7 @@ class Ext4XattrEntry(Ext4Struct):
         return f"{self.__class__.__name__}({self.name}={self.value})"
 
     def __bool__(self) -> bool:
-        return bool(self.e_name_len | self.e_name_index | self.e_value_offs | self.e_value_inum)
+        return bool(self.e_name_len | self.e_name_index | self.e_value_offs)
 
 
 EXT4_XATTR_PREFIXES = {
@@ -391,16 +391,25 @@ class Ext4Filesystem:
                     # End of xattr list
                     return
 
-                # Extract name (null terminated)
+                if xattr.e_value_inum != 0:
+                    # value is stored in a different inode
+                    xattr_inode = self.get_inode(xattr.e_value_inum)
+                    assert xattr_inode.e4inode.i_flags & EXT4_EA_INODE_FL == 0
+                    value_buffer = xattr_inode.read()[xattr.e_value_offs: xattr.e_value_offs + xattr.e_value_size + 1]
+                else:
+                    # value is stored in the same inode
+                    value_buffer = data[xattr.e_value_offs: xattr.e_value_offs + xattr.e_value_size + 1]
+
+                # Extract value (null terminated)
                 j = -1
-                for j, b in enumerate(data[xattr.e_value_offs:xattr.e_value_offs + xattr.e_value_size + 1]):
+                for j, b in enumerate(value_buffer):
                     if b == 0:
                         break
 
                 if j == -1:
                     raise ValueError('xattr not null terminated')
 
-                xattr.value = data[xattr.e_value_offs: xattr.e_value_offs + j]
+                xattr.value = value_buffer[:j]
 
                 yield xattr
 
@@ -413,15 +422,18 @@ class Ext4Filesystem:
         # The first place is between the end of each inode entry and the beginning of the next inode entry.
         # Calculate the available bytes for in-inode storage.
         avail = self.sb.s_inode_size - (128 + inode.e4inode.i_extra_isize)
-        data = self.read_bytes(inode.offset + 128 + inode.e4inode.i_extra_isize, avail)
-        assert data[0:4] == b"\x00\x00\x02\xea"  # magic number: 0xEA020000 (ext4_xattr_ibody_header)
-        yield from read(data[4:], 0)
+        if avail > 0:
+            data = self.read_bytes(inode.offset + 128 + inode.e4inode.i_extra_isize, avail)
+            if data[0:4] == b"\x00\x00\x02\xea":
+                # magic number: 0xEA020000 (ext4_xattr_ibody_header)
+                yield from read(data[4:], 0)
 
         # The second place where extended attributes can be found is pointed to by inode.i_file_acl.
-        data = self.read_blocks(inode.e4inode.i_file_acl_lo, 1)
-        header = Ext4XattrHeader.from_bytes(data)
-        assert header.h_magic == 0xEA020000
-        yield from read(data, 32)
+        if inode.e4inode.i_file_acl_lo != 0:
+            data = self.read_blocks(inode.e4inode.i_file_acl_lo, 1)
+            header = Ext4XattrHeader.from_bytes(data)
+            assert header.h_magic == 0xEA020000
+            yield from read(data, 32)
 
 
 @dataclasses.dataclass

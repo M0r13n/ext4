@@ -6,32 +6,7 @@ import unittest
 
 from ext4 import Ext4Filesystem
 
-EXT4_IMG_PATH = pathlib.Path(__file__).parent.parent.joinpath('ext4.img')
-EXT4_MNT_PATH = pathlib.Path('/mnt/ext4')
-
-
-class BaseTestCase(unittest.TestCase):
-
-    FILES = []
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        # Create all files
-        for file in cls.FILES:
-            if not file.exists():
-                file.touch()
-
-        # The OS might take some time to sync
-        os.sync()
-        cls.fs = Ext4Filesystem(EXT4_IMG_PATH)
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        # Cleanup and remove artifacts
-        # Create all files
-        for file in cls.FILES:
-            file.unlink(True)
-        cls.fs.close()
+from .base import BaseTestCase, EXT4_MNT_PATH, EXT4_IMG_PATH
 
 
 class Ext4ReadRootTestCase(BaseTestCase):
