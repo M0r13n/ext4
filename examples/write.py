@@ -1,7 +1,5 @@
 
 import os
-import pathlib
-import sys
 
 from ext4 import Ext4Filesystem, ls
 

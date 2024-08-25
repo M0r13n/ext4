@@ -1,6 +1,6 @@
 import pathlib
 import os
-from .base import BaseTestCase, EXT4_MNT_PATH, EXT4_IMG_PATH, get_inode
+from .base import BaseTestCase, EXT4_MNT_PATH, get_inode
 
 
 def create_file_with_xattrs(file, xattrs) -> pathlib.Path:

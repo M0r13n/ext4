@@ -1,9 +1,8 @@
 #!/bin/env python
 import os
 import pathlib
-import sys
 
-from ext4 import Ext4DirEntry2, Ext4Filesystem, Inode, ls, cat, Ext4XattrEntry, EXT4_XATTR_PREFIXES
+from ext4 import Ext4Filesystem, Inode
 
 MNT_POINT = pathlib.Path('/mnt/ext4')
 

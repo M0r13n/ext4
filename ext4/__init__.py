@@ -19,7 +19,7 @@ LE32 = '<L'
 U8 = 'B'
 
 
-def read_little_endian(raw: bytes, offset: int, fmt: str) -> int:
+def read_little_endian(raw: bytes, offset: int, fmt: str) -> typing.Any:
     return struct.unpack_from(fmt, raw, offset)[0]
 
 
@@ -38,9 +38,10 @@ class Ext4Struct:
             kwargs[attr] = read_little_endian(block, offset, size)
         return cls(**kwargs)
 
-    def pretty_print(self):
+    def pretty_print(self) -> None:
         print(f'struct {self.HUMAN_NAME}:')
-        for f in dataclasses.fields(self):
+        assert dataclasses.is_dataclass(self)
+        for f in dataclasses.fields(self.__class__):
             print(f"  {f.name}: {getattr(self, f.name)}")
 
 # --- Superblock ---
@@ -87,12 +88,12 @@ class Ext4Superblock(Ext4Struct):
     s_inode_size: int
     s_desc_size: int
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.s_magic != EXT4MAGIC:
             raise ValueError(f'no ext4 superblock: invalid magic number {self.s_magic}')
 
     def get_block_size(self) -> int:
-        return 2 ** (10 + self.s_log_block_size)
+        return int(2 ** (10 + self.s_log_block_size))
 
 
 EXT4GROUP_DESCRIPTOR_FIELDS = [
@@ -165,7 +166,7 @@ class Ext4XattrEntry(Ext4Struct):
         return EXT4_XATTR_PREFIXES[self.e_name_index] + self.e_name.decode()
 
     def __str__(self) -> str:
-        return f"{self.__class__.__name__}({self.name}={self.value})"
+        return f"{self.__class__.__name__}({self.name}={self.value!r})"
 
     def __bool__(self) -> bool:
         return bool(self.e_name_len | self.e_name_index | self.e_value_offs)
@@ -271,22 +272,22 @@ class Inode:
         self.file_type = InodeFileType.from_raw(e4inode.i_mode)
         self.filesystem = filesystem
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f'Inode(i_num={self.i_num}, offset={self.offset})'
 
     @property
-    def is_file(self):
+    def is_file(self) -> bool:
         return self.file_type == InodeFileType.S_IFREG
 
     @property
-    def is_dir(self):
+    def is_dir(self) -> bool:
         return self.file_type == InodeFileType.S_IFDIR
 
     @property
-    def size(self):
+    def size(self) -> int:
         return self.e4inode.i_size_high << 32 | self.e4inode.i_size_lo
 
-    def read(self):
+    def read(self) -> bytes:
         bs = ByteStream.create(self)
         return bs.read()
 
@@ -326,25 +327,28 @@ class Ext4Filesystem:
         self.gdt: list[Ext4GroupDescriptor] = []
         self.read_gdt()
 
-    def close(self):
+    def close(self) -> None:
         self.fd.close()
         del self.fd
 
-    def __enter__(self):
+    def __enter__(self) -> typing.Self:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: typing.Any, exc_val: typing.Any, exc_tb: typing.Any) -> None:
         self.fd.close()
 
-    def read_bytes(self, offset, length):
+    def read_bytes(self, offset: int, length: int) -> bytes:
         self.fd.seek(offset)
         b = self.fd.read(length)
         return b
 
-    def read_blocks(self, i, n):
+    def read_blocks(self, i: int, n: int) -> bytes:
+        # Read N block beginning at block i
         return self.read_bytes(i * self.sb.get_block_size(), n * self.sb.get_block_size())
 
-    def read_gdt(self):
+    def read_gdt(self) -> None:
+        # Fill the group descriptor table
+        self.gdt = []
         num_groups = self.sb.s_inodes_count // self.sb.s_inodes_per_group
         # the group descriptor table is found in the block following the super block
         group_desc_table_offset = self.sb.get_block_size()
@@ -367,18 +371,11 @@ class Ext4Filesystem:
         e4inode = Ext4Inode.from_bytes(self.read_bytes(inode_offset, 160))
         return Inode(idx, inode_offset, e4inode, self)
 
-    def get_inode_group(self, idx: int):
+    def get_inode_group(self, idx: int) -> tuple[int, int]:
         # return (group_idx, inode_table_entry_idx)
         group_idx = (idx - 1) // self.sb.s_inodes_per_group
         inode_table_entry_idx = (idx - 1) % self.sb.s_inodes_per_group
         return (group_idx, inode_table_entry_idx)
-
-    def iter_dir(self, inode: Inode):
-        if not inode.is_dir:
-            raise ValueError('can only iterate over directories')
-        if inode.e4inode.i_flags & 0x1000 != 0:
-            raise NotImplementedError('directory has hashed indexes (EXT4_INDEX_FL)')
-        return None
 
     def get_xattrs(self, inode: Inode) -> typing.Generator[Ext4XattrEntry, None, None]:
         # Read extended attributes (xattrs) for this inode.
@@ -503,7 +500,7 @@ class Ext4DirEntry2(Ext4Struct):
     name: bytes = dataclasses.field(init=False)
 
     @classmethod
-    def from_bytes(cls: typing.Type[T], block: bytes) -> T:
+    def from_bytes(cls: typing.Type['Ext4DirEntry2'], block: bytes) -> 'Ext4DirEntry2':
         de = super().from_bytes(block[:8])
         de.name = block[8: 8 + de.name_len]
         return de
@@ -526,15 +523,16 @@ class ByteStream(abc.ABC):
         if inode.e4inode.i_flags & Ext4InodeFlags.EXT4_EXTENTS_FL != 0:
             return ExtentByteStream(inode)
         elif inode.e4inode.i_flags & Ext4InodeFlags.EXT4_INLINE_DATA_FL != 0:
-            return InlineByteStream(inode)
+            # TODO
+            return InlineByteStream(inode)  # type: ignore
         else:
             raise ValueError('can only read extents or inline data')
 
     @abc.abstractmethod
-    def iter_blocks(self):
+    def iter_blocks(self) -> typing.Generator[int, None, None]:
         pass
 
-    def read_blocks(self, blocks: int = -1):
+    def read_blocks(self, blocks: int = -1) -> typing.Generator[bytes, None, None]:
         """Read consecutive blocks as bytes"""
         end = self.inode.size
         block_size = self.inode.filesystem.sb.get_block_size()
@@ -555,17 +553,17 @@ class ByteStream(abc.ABC):
             if bytes_read >= end:
                 return
 
-    def read(self):
+    def read(self) -> bytes:
         return b"".join(self.read_blocks(-1))
 
 
 class ExtentByteStream(ByteStream):
 
-    def iter_blocks(self):
+    def iter_blocks(self) -> typing.Generator[int, None, None]:
         """Yield consecutive number of blocks for this extent.
         e.g.: [15, 16, 17, ...]"""
 
-        def traverse_extent_tree(block_data, depth):
+        def traverse_extent_tree(block_data: bytes, depth: int) -> typing.Generator[int, None, None]:
             header = Ext4ExtentHeader.from_bytes(block_data[:12])
             assert header.eh_magic == 0xF30A
 
@@ -596,7 +594,7 @@ class InlineByteStream(ByteStream):
     pass
 
 
-def human_mode(mode):
+def human_mode(mode: int) -> str:
     mode_string = ''
     fields = (
         Ext4Permission.S_IRUSR,
@@ -617,7 +615,7 @@ def human_mode(mode):
     return mode_string
 
 
-def ls(root: Inode):
+def ls(root: Inode) -> None:
     for entry in root.iter():
         # .rwxrwxrwx root root 12301 Jul 13 11:01 test.file
         inode = root.filesystem.get_inode(entry.inode)
@@ -629,7 +627,7 @@ def ls(root: Inode):
         print(f'{prefix}{mode} {inode.e4inode.i_uid} {inode.e4inode.i_gid} {size} {mtime.isoformat()} {entry.name.decode()}')
 
 
-def cat(root: Inode):
+def cat(root: Inode) -> None:
     if not root.is_file:
         raise TypeError('can only cat files')
     print(root.read().decode(), end='')

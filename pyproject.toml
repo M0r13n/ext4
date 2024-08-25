@@ -1,14 +1,18 @@
 [project]
 name = "ext4"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 version = "0.0.0"
 authors = [
-  {name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" }
+    { name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" },
 ]
 maintainers = [
-   {name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" }]
+    { name = "Leon Morten Richter", email = "misc@leonmortenrichter.de" },
+]
 
 dependencies = []
+
+[project.optional-dependencies]
+dev = ['mypy', 'flake8']
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]

@@ -23,6 +23,7 @@ class BaseTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        cls.check_precon()
         # Create all files
         for file in cls.FILES:
             if not file.exists():
@@ -31,6 +32,24 @@ class BaseTestCase(unittest.TestCase):
         # The OS might take some time to sync
         os.sync()
         cls.fs = Ext4Filesystem(EXT4_IMG_PATH)
+
+    @staticmethod
+    def check_precon():
+        # Check preconditions (e.g. mounted volume)
+        if not EXT4_IMG_PATH.exists():
+            raise FileNotFoundError(f'{EXT4_IMG_PATH} not found. Did you run "./scripts/create_virtual_fs.sh"?')
+
+        if not EXT4_MNT_PATH.exists():
+            raise FileNotFoundError(f'{EXT4_MNT_PATH} not found. Did you run "./scripts/create_virtual_fs.sh"?')
+
+        try:
+            test = EXT4_MNT_PATH.joinpath('test.test')
+            test.touch()
+            test.unlink()
+        except PermissionError as err:
+            raise PermissionError(
+                'Can not read/write to test path. Did you run "./scripts/create_virtual_fs.sh"?'
+            ) from err
 
     @classmethod
     def tearDownClass(cls) -> None:
