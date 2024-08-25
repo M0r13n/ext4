@@ -3,7 +3,7 @@
 set -e
 
 IMG_FILE="ext4.img"
-LOOP_DEVICE="/dev/loop1338"
+LOOP_DEVICE="/dev/loop1337"
 MOUNT_POINT="/mnt/ext4"
 
 # Create the image file if it does not exist
@@ -14,6 +14,9 @@ fi
 # Set up the loop device if it is not already set up
 if ! losetup -j $IMG_FILE | grep -q $LOOP_DEVICE; then
   sudo losetup $LOOP_DEVICE $IMG_FILE
+else
+    sudo losetup -d $LOOP_DEVICE
+    sudo losetup $LOOP_DEVICE $IMG_FILE
 fi
 
 # Create the filesystem if it does not already exist
