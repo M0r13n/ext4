@@ -1,6 +1,6 @@
 import pprint
 
-from ext4 import Ext4Filesystem, Inode, tunefs
+from ext4 import Ext4Filesystem, tunefs
 
 
 def main():

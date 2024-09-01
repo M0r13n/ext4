@@ -7,7 +7,6 @@ import dataclasses
 import typing
 import math
 import uuid
-import itertools
 import pwd
 import grp
 
@@ -908,21 +907,21 @@ def cat(root: Inode) -> None:
     print(root.read().decode(), end='')
 
 
-def get_features(sb: Ext4Superblock):
-    for feature in CompatFeature:
-        if feature & sb.s_feature_compat:
-            yield feature.name
+def get_features(sb: Ext4Superblock) -> typing.Generator[str | None, None, None]:
+    for cf in CompatFeature:
+        if cf & sb.s_feature_compat:
+            yield cf.name
 
-    for feature in IncompatFeature:
-        if feature & sb.s_feature_incompat:
-            yield feature.name
+    for icf in IncompatFeature:
+        if icf & sb.s_feature_incompat:
+            yield icf.name
 
-    for feature in RoCompatFeature:
-        if feature & sb.s_feature_ro_compat:
-            yield feature.name
+    for rcf in RoCompatFeature:
+        if rcf & sb.s_feature_ro_compat:
+            yield rcf.name
 
 
-def get_mount_opts(sb: Ext4Superblock):
+def get_mount_opts(sb: Ext4Superblock) -> typing.Generator[str | None, None, None]:
     for opt in Ext4DefMountOpt:
         if opt & sb.s_default_mount_opts:
             yield opt.name
@@ -949,7 +948,7 @@ def get_group_by_uid(uid: int) -> str:
         return 'unknown'
 
 
-def tunefs(fs: Ext4Filesystem):
+def tunefs(fs: Ext4Filesystem) -> dict[str, typing.Any]:
     sb = fs.sb
     return {
         "Last mounted on": sb.s_last_mounted.decode(),
