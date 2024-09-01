@@ -8,6 +8,8 @@ import typing
 import math
 import uuid
 import itertools
+import pwd
+import grp
 
 # --- Constants ---
 
@@ -354,6 +356,15 @@ class Ext4DefMountOpt(enum.IntFlag):
     BLOCK_VALIDITY = 0x0200               # Track which blocks are metadata
     DISCARD = 0x0400                      # Enable DISCARD support
     NODELALLOC = 0x0800                   # Disable delayed allocation
+
+
+class HashAlgorithm(enum.IntEnum):
+    LEGACY = 0x0
+    HALF_MD4 = 0x1
+    TEA = 0x2
+    LEGACY_UNSIGNED = 0x3
+    HALF_MD4_UNSIGNED = 0x4
+    TEA_UNSIGNED = 0x5
 
 
 EXT4GROUP_DESCRIPTOR_FIELDS = [
@@ -917,6 +928,27 @@ def get_mount_opts(sb: Ext4Superblock):
             yield opt.name
 
 
+def format_time(ts: int) -> str:
+    dt = datetime.datetime.fromtimestamp(ts)
+    return dt.strftime('%a %b %d %H:%M:%S %Y')
+
+
+def get_username_by_uid(uid: int) -> str:
+    """Return the username for a given user ID."""
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return 'unknown'
+
+
+def get_group_by_uid(uid: int) -> str:
+    """Return the group for a given ID."""
+    try:
+        return grp.getgrgid(uid).gr_name
+    except KeyError:
+        return 'unknown'
+
+
 def tunefs(fs: Ext4Filesystem):
     sb = fs.sb
     return {
@@ -945,24 +977,24 @@ def tunefs(fs: Ext4Filesystem):
         "Inodes per group": sb.s_inodes_per_group,
         "Inode blocks per group": (sb.s_inodes_per_group * sb.s_inode_size + sb.get_block_size() - 1) // sb.get_block_size(),
         "Flex block group size": sb.s_log_groups_per_flex,
-        "Filesystem created": "Sun Aug 25 13:20:38 2024",
-        "Last mount time": "Sat Aug 31 13:08:13 2024",
-        "Last write time": "Sat Aug 31 13:08:13 2024",
-        "Mount count": 2,
-        "Maximum mount count": -1,
-        "Last checked": "Sun Aug 25 13:20:38 2024",
+        "Filesystem created": format_time(sb.s_mkfs_time),
+        "Last mount time": format_time(sb.s_mtime),
+        "Last write time": format_time(sb.s_wtime),
+        "Mount count": sb.s_mnt_count,
+        "Maximum mount count": sb.s_max_mnt_count,
+        "Last checked": format_time(sb.s_lastcheck),
         "Check interval": "0 (<none>)",
-        "Lifetime writes": "1264 MB",
-        "Reserved blocks uid": "0 (user root)",
-        "Reserved blocks gid": "0 (group root)",
-        "First inode": 11,
-        "Inode size": 256,
-        "Required extra isize": 32,
-        "Desired extra isize": 32,
-        "Journal inode": 8,
-        "Default directory hash": "half_md4",
-        "Directory Hash Seed": "af7f6a73-c7d5-481e-9b69-0c9a5e5749c3",
-        "Journal backup": "inode blocks",
-        "Checksum type": "crc32c",
-        "Checksum": "0x8ed34b21"
+        "Lifetime writes": f"{sb.s_kbytes_written // 1024} MB",
+        "Reserved blocks uid": f"{sb.s_def_resuid} (user {get_username_by_uid(sb.s_def_resuid)})",
+        "Reserved blocks gid": f"{sb.s_def_resgid} (group {get_group_by_uid(sb.s_def_resgid)})",
+        "First inode": sb.s_first_ino,
+        "Inode size": sb.s_inode_size,
+        "Required extra isize": sb.s_min_extra_isize,
+        "Desired extra isize": sb.s_want_extra_isize,
+        "Journal inode": sb.s_journal_inum,
+        "Default directory hash": HashAlgorithm(sb.s_def_hash_version).name,
+        "Directory Hash Seed": str(sb.s_hash_seed),
+        "Journal backup": 'inode blocks' if sb.s_jnl_backup_type == 1 else 'Unknown',  # TODO: not sure
+        "Checksum type": 'crc32c' if sb.s_checksum_type else 'Invalid',
+        "Checksum": hex(sb.s_checksum)  # TODO: how to calculate & verify the checksum?
     }
