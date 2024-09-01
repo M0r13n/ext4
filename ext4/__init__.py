@@ -6,6 +6,8 @@ import struct
 import dataclasses
 import typing
 import math
+import uuid
+import itertools
 
 # --- Constants ---
 
@@ -16,11 +18,18 @@ EXT4_EA_INODE_FL = 0x200000
 
 LE16 = '<H'
 LE32 = '<L'
+LE64 = '<Q'
 U8 = 'B'
+CHAR = 'c'
 
 
 def read_little_endian(raw: bytes, offset: int, fmt: str) -> typing.Any:
-    return struct.unpack_from(fmt, raw, offset)[0]
+    unpacked = struct.unpack_from(fmt, raw, offset)
+    if len(unpacked) == 1:
+        return unpacked[0]
+    elif 'c' in fmt:
+        return b"".join(unpacked)
+    return unpacked
 
 
 T = typing.TypeVar('T', bound='Ext4Struct')
@@ -48,21 +57,107 @@ class Ext4Struct:
 
 
 EXT4SUPERBLOCK_FIELDS = [
-    # attribute, offset, size
     ('s_inodes_count', 0x0, LE32),
     ('s_blocks_count_lo', 0x4, LE32),
+    ('s_r_blocks_count_lo', 0x8, LE32),
     ('s_free_blocks_count_lo', 0xC, LE32),
     ('s_free_inodes_count', 0x10, LE32),
     ('s_first_data_block', 0x14, LE32),
     ('s_log_block_size', 0x18, LE32),
+    ('s_log_cluster_size', 0x1C, LE32),
     ('s_blocks_per_group', 0x20, LE32),
+    ('s_clusters_per_group', 0x24, LE32),
     ('s_inodes_per_group', 0x28, LE32),
     ('s_mtime', 0x2C, LE32),
     ('s_wtime', 0x30, LE32),
+    ('s_mnt_count', 0x34, LE16),
+    ('s_max_mnt_count', 0x36, LE16),
     ('s_magic', 0x38, LE16),
+    ('s_state', 0x3A, LE16),
+    ('s_errors', 0x3C, LE16),
+    ('s_minor_rev_level', 0x3E, LE16),
+    ('s_lastcheck', 0x40, LE32),
+    ('s_checkinterval', 0x44, LE32),
+    ('s_creator_os', 0x48, LE32),
+    ('s_rev_level', 0x4C, LE32),
+    ('s_def_resuid', 0x50, LE16),
+    ('s_def_resgid', 0x52, LE16),
     ('s_first_ino', 0x54, LE32),
-    ('s_inode_size', 0x58, LE32),
+    ('s_inode_size', 0x58, LE16),
+    ('s_block_group_nr', 0x5A, LE16),
+    ('s_feature_compat', 0x5C, LE32),
+    ('s_feature_incompat', 0x60, LE32),
+    ('s_feature_ro_compat', 0x64, LE32),
+    ('s_uuid', 0x68, CHAR * 16),
+    ('s_volume_name', 0x78, CHAR * 16),
+    ('s_last_mounted', 0x88, CHAR * 64),
+    ('s_algorithm_usage_bitmap', 0xC8, LE32),
+    ('s_prealloc_blocks', 0xCC, U8),
+    ('s_prealloc_dir_blocks', 0xCD, U8),
+    ('s_reserved_gdt_blocks', 0xCE, LE16),
+    ('s_journal_uuid', 0xD0, 'B' * 16),
+    ('s_journal_inum', 0xE0, LE32),
+    ('s_journal_dev', 0xE4, LE32),
+    ('s_last_orphan', 0xE8, LE32),
+    ('s_hash_seed', 0xEC, CHAR * 16),
+    ('s_def_hash_version', 0xFC, U8),
+    ('s_jnl_backup_type', 0xFD, U8),
     ('s_desc_size', 0xFE, LE16),
+    ('s_default_mount_opts', 0x100, LE32),
+    ('s_first_meta_bg', 0x104, LE32),
+    ('s_mkfs_time', 0x108, LE32),
+    ('s_jnl_blocks', 0x10C, '<LLLLLLLLLLLLLLLLL'),
+    ('s_blocks_count_hi', 0x150, LE32),
+    ('s_r_blocks_count_hi', 0x154, LE32),
+    ('s_free_blocks_count_hi', 0x158, LE32),
+    ('s_min_extra_isize', 0x15C, LE16),
+    ('s_want_extra_isize', 0x15E, LE16),
+    ('s_flags', 0x160, LE32),
+    ('s_raid_stride', 0x164, LE16),
+    ('s_mmp_interval', 0x166, LE16),
+    ('s_mmp_block', 0x168, LE64),
+    ('s_raid_stripe_width', 0x170, LE32),
+    ('s_log_groups_per_flex', 0x174, U8),
+    ('s_checksum_type', 0x175, U8),
+    ('s_reserved_pad', 0x176, LE16),
+    ('s_kbytes_written', 0x178, LE64),
+    ('s_snapshot_inum', 0x180, LE32),
+    ('s_snapshot_id', 0x184, LE32),
+    ('s_snapshot_r_blocks_count', 0x188, LE64),
+    ('s_snapshot_list', 0x190, LE32),
+    ('s_error_count', 0x194, LE32),
+    ('s_first_error_time', 0x198, LE32),
+    ('s_first_error_ino', 0x19C, LE32),
+    ('s_first_error_block', 0x1A0, LE64),
+    ('s_first_error_func', 0x1A8, CHAR * 32),
+    ('s_first_error_line', 0x1C8, LE32),
+    ('s_last_error_time', 0x1CC, LE32),
+    ('s_last_error_ino', 0x1D0, LE32),
+    ('s_last_error_line', 0x1D4, LE32),
+    ('s_last_error_block', 0x1D8, LE64),
+    ('s_last_error_func', 0x1E0, CHAR * 32),
+    ('s_mount_opts', 0x200, CHAR * 64),
+    ('s_usr_quota_inum', 0x240, LE32),
+    ('s_grp_quota_inum', 0x244, LE32),
+    ('s_overhead_blocks', 0x248, LE32),
+    ('s_backup_bgs', 0x24C, '<LL'),
+    ('s_encrypt_algos', 0x254, CHAR * 4),
+    ('s_encrypt_pw_salt', 0x258, CHAR * 16),
+    ('s_lpf_ino', 0x268, LE32),
+    ('s_prj_quota_inum', 0x26C, LE32),
+    ('s_checksum_seed', 0x270, LE32),
+    ('s_wtime_hi', 0x274, U8),
+    ('s_mtime_hi', 0x275, U8),
+    ('s_mkfs_time_hi', 0x276, U8),
+    ('s_lastcheck_hi', 0x277, U8),
+    ('s_first_error_time_hi', 0x278, U8),
+    ('s_last_error_time_hi', 0x279, U8),
+    ('s_pad', 0x27A, CHAR * 2),
+    ('s_encoding', 0x27C, LE16),
+    ('s_encoding_flags', 0x27E, LE16),
+    ('s_orphan_file_inum', 0x280, LE32),
+    ('s_reserved', 0x284, '<' + 'L' * 94),
+    ('s_checksum', 0x3FC, LE32)
 ]
 
 
@@ -72,28 +167,193 @@ class Ext4Superblock(Ext4Struct):
     FIELDS = EXT4SUPERBLOCK_FIELDS
     HUMAN_NAME = 'ext4_super_block'
 
-    # NOTE: not all fields implemented
     s_inodes_count: int
     s_blocks_count_lo: int
+    s_r_blocks_count_lo: int
     s_free_blocks_count_lo: int
     s_free_inodes_count: int
     s_first_data_block: int
     s_log_block_size: int
+    s_log_cluster_size: int
     s_blocks_per_group: int
+    s_clusters_per_group: int
     s_inodes_per_group: int
     s_mtime: int
     s_wtime: int
+    s_mnt_count: int
+    s_max_mnt_count: int
     s_magic: int
+    s_state: int
+    s_errors: int
+    s_minor_rev_level: int
+    s_lastcheck: int
+    s_checkinterval: int
+    s_creator_os: int
+    s_rev_level: int
+    s_def_resuid: int
+    s_def_resgid: int
     s_first_ino: int
     s_inode_size: int
+    s_block_group_nr: int
+    s_feature_compat: int
+    s_feature_incompat: int
+    s_feature_ro_compat: int
+    s_uuid: uuid.UUID
+    s_volume_name: bytes
+    s_last_mounted: bytes
+    s_algorithm_usage_bitmap: int
+    s_prealloc_blocks: int
+    s_prealloc_dir_blocks: int
+    s_reserved_gdt_blocks: int
+    s_journal_uuid: bytes
+    s_journal_inum: int
+    s_journal_dev: int
+    s_last_orphan: int
+    s_hash_seed: uuid.UUID
+    s_def_hash_version: int
+    s_jnl_backup_type: int
     s_desc_size: int
+    s_default_mount_opts: int
+    s_first_meta_bg: int
+    s_mkfs_time: int
+    s_jnl_blocks: bytes
+    s_blocks_count_hi: int
+    s_r_blocks_count_hi: int
+    s_free_blocks_count_hi: int
+    s_min_extra_isize: int
+    s_want_extra_isize: int
+    s_flags: int
+    s_raid_stride: int
+    s_mmp_interval: int
+    s_mmp_block: int
+    s_raid_stripe_width: int
+    s_log_groups_per_flex: int
+    s_checksum_type: int
+    s_reserved_pad: int
+    s_kbytes_written: int
+    s_snapshot_inum: int
+    s_snapshot_id: int
+    s_snapshot_r_blocks_count: int
+    s_snapshot_list: int
+    s_error_count: int
+    s_first_error_time: int
+    s_first_error_ino: int
+    s_first_error_block: int
+    s_first_error_func: bytes
+    s_first_error_line: int
+    s_last_error_time: int
+    s_last_error_ino: int
+    s_last_error_line: int
+    s_last_error_block: int
+    s_last_error_func: bytes
+    s_mount_opts: bytes
+    s_usr_quota_inum: int
+    s_grp_quota_inum: int
+    s_overhead_blocks: int
+    s_backup_bgs: bytes
+    s_encrypt_algos: bytes
+    s_encrypt_pw_salt: bytes
+    s_lpf_ino: int
+    s_prj_quota_inum: int
+    s_checksum_seed: int
+    s_wtime_hi: int
+    s_mtime_hi: int
+    s_mkfs_time_hi: int
+    s_lastcheck_hi: int
+    s_first_error_time_hi: int
+    s_last_error_time_hi: int
+    s_pad: bytes
+    s_encoding: int
+    s_encoding_flags: int
+    s_orphan_file_inum: int
+    s_reserved: bytes
+    s_checksum: int
 
     def __post_init__(self) -> None:
+        # Ensure correct magic number
         if self.s_magic != EXT4MAGIC:
             raise ValueError(f'no ext4 superblock: invalid magic number {self.s_magic}')
 
+        # Remove null termination from byte string
+        self.s_last_mounted = self.s_last_mounted.rstrip(b'\x00')
+
+        # Transform raw bytes to UUID for s_uuid
+        if isinstance(self.s_uuid, bytes):
+            self.s_uuid = uuid.UUID(bytes=self.s_uuid)
+
+        # Transform raw bytes to UUID for s_hash_seed
+        if isinstance(self.s_hash_seed, bytes):
+            self.s_hash_seed = uuid.UUID(bytes=self.s_hash_seed)
+
     def get_block_size(self) -> int:
         return int(2 ** (10 + self.s_log_block_size))
+
+
+class CompatFeature(enum.IntFlag):
+    DIR_PREALLOC = 0x1                # Directory preallocation
+    IMAGIC_INODES = 0x2               # "imagic inodes"
+    HAS_JOURNAL = 0x4                 # Has a journal
+    EXT_ATTR = 0x8                    # Supports extended attributes
+    RESIZE_INODE = 0x10               # Has reserved GDT blocks for filesystem expansion
+    DIR_INDEX = 0x20                  # Has directory indices
+    LAZY_BG = 0x40                    # "Lazy BG" for uninitialized block groups
+    EXCLUDE_INODE = 0x80              # "Exclude inode"
+    EXCLUDE_BITMAP = 0x100            # "Exclude bitmap" for snapshot-related exclude bitmaps
+    SPARSE_SUPER2 = 0x200             # Sparse Super Block, v2
+    FAST_COMMIT = 0x400               # Fast commits supported
+    ORPHAN_FILE = 0x1000              # Orphan file allocated
+
+
+class IncompatFeature(enum.IntFlag):
+    COMPRESSION = 0x1                      # Compression
+    FILETYPE = 0x2                         # Directory entries record the file type
+    RECOVER = 0x4                          # Filesystem needs recovery
+    JOURNAL_DEV = 0x8                      # Filesystem has a separate journal device
+    META_BG = 0x10                         # Meta block groups
+    EXTENTS = 0x40                         # Files in this filesystem use extents
+    BIT_64 = 0x80                          # Enable a filesystem size of 2^64 blocks
+    MMP = 0x100                            # Multiple mount protection
+    FLEX_BG = 0x200                        # Flexible block groups
+    EA_INODE = 0x400                       # Inodes can store large extended attribute values
+    DIRDATA = 0x1000                       # Data in directory entry (not implemented?)
+    CSUM_SEED = 0x2000                     # Metadata checksum seed stored in the superblock
+    LARGEDIR = 0x4000                      # Large directory >2GB or 3-level htree
+    INLINE_DATA = 0x8000                   # Data in inode
+    ENCRYPT = 0x10000
+
+
+class RoCompatFeature(enum.IntFlag):
+    SPARSE_SUPER = 0x1                  # Sparse superblocks
+    LARGE_FILE = 0x2                    # File > 2GiB
+    BTREE_DIR = 0x4                     # Not used (RO_COMPAT_BTREE_DIR)
+    HUGE_FILE = 0x8                     # Files use units of logical blocks (RO_COMPAT_HUGE_FILE)
+    GDT_CSUM = 0x10                     # Group descriptors have checksums (RO_COMPAT_GDT_CSUM)
+    DIR_NLINK = 0x20                    # Old ext3 subdirectory limit no longer applies (RO_COMPAT_DIR_NLINK)
+    EXTRA_ISIZE = 0x40                  # Large inodes exist on the filesystem (RO_COMPAT_EXTRA_ISIZE)
+    HAS_SNAPSHOT = 0x80                 # Filesystem has a snapshot (RO_COMPAT_HAS_SNAPSHOT)
+    QUOTA = 0x100                       # Quota support (RO_COMPAT_QUOTA)
+    BIGALLOC = 0x200                    # Filesystem supports "bigalloc" (RO_COMPAT_BIGALLOC)
+    METADATA_CSUM = 0x400               # Metadata checksumming supported (RO_COMPAT_METADATA_CSUM)
+    REPLICA = 0x800                     # Filesystem supports replicas (RO_COMPAT_REPLICA)
+    READONLY = 0x1000                   # Read-only filesystem image (RO_COMPAT_READONLY)
+    PROJECT = 0x2000                    # Filesystem tracks project quotas (RO_COMPAT_PROJECT)
+    VERITY = 0x8000                     # Verity inodes may be present (RO_COMPAT_VERITY)
+    ORPHAN_PRESENT = 0x10000
+
+
+class Ext4DefMountOpt(enum.IntFlag):
+    DEBUG = 0x0001                        # Print debugging info upon (re)mount
+    BSDGROUPS = 0x0002                    # New files take the gid of the containing directory
+    XATTR_USER = 0x0004                   # Support userspace-provided extended attributes
+    ACL = 0x0008                          # Support POSIX access control lists (ACLs)
+    UID16 = 0x0010                        # Do not support 32-bit UIDs
+    JMODE_DATA = 0x0020                   # All data and metadata are committed to the journal
+    JMODE_ORDERED = 0x0040                # All data are flushed before metadata is committed to the journal
+    JMODE_WBACK = 0x0060                  # Data ordering is not preserved; may be written after metadata
+    NOBARRIER = 0x0100                    # Disable write flushes
+    BLOCK_VALIDITY = 0x0200               # Track which blocks are metadata
+    DISCARD = 0x0400                      # Enable DISCARD support
+    NODELALLOC = 0x0800                   # Disable delayed allocation
 
 
 EXT4GROUP_DESCRIPTOR_FIELDS = [
@@ -615,6 +875,10 @@ def human_mode(mode: int) -> str:
     return mode_string
 
 
+#
+# Commands
+#
+
 def ls(root: Inode) -> None:
     for entry in root.iter():
         # .rwxrwxrwx root root 12301 Jul 13 11:01 test.file
@@ -631,3 +895,74 @@ def cat(root: Inode) -> None:
     if not root.is_file:
         raise TypeError('can only cat files')
     print(root.read().decode(), end='')
+
+
+def get_features(sb: Ext4Superblock):
+    for feature in CompatFeature:
+        if feature & sb.s_feature_compat:
+            yield feature.name
+
+    for feature in IncompatFeature:
+        if feature & sb.s_feature_incompat:
+            yield feature.name
+
+    for feature in RoCompatFeature:
+        if feature & sb.s_feature_ro_compat:
+            yield feature.name
+
+
+def get_mount_opts(sb: Ext4Superblock):
+    for opt in Ext4DefMountOpt:
+        if opt & sb.s_default_mount_opts:
+            yield opt.name
+
+
+def tunefs(fs: Ext4Filesystem):
+    sb = fs.sb
+    return {
+        "Last mounted on": sb.s_last_mounted.decode(),
+        "Filesystem UUID": str(sb.s_uuid),
+        "Filesystem magic number": hex(sb.s_magic),
+        "Filesystem revision": sb.s_rev_level,
+        "Filesystem features": ' '.join(map(str, get_features(sb))),
+        "Default mount options": ' '.join(map(str, get_mount_opts(sb))),
+        "Filesystem state": "clean" if sb.s_state == 1 else "unknown",
+        "Errors behavior": "Continue" if sb.s_errors == 1 else "Unknown",
+        "Filesystem OS type": "Linux" if sb.s_creator_os == 0 else "Unknown",
+        "Inode count": sb.s_inodes_count,
+        "Block count": sb.s_blocks_count_lo + (sb.s_blocks_count_hi << 32),
+        "Reserved block count": sb.s_r_blocks_count_lo + (sb.s_r_blocks_count_hi << 32),
+        "Overhead clusters": sb.s_overhead_blocks,
+        "Free blocks": sb.s_free_blocks_count_lo + (sb.s_free_blocks_count_hi << 32),
+        "Free inodes": sb.s_free_inodes_count,
+        "First block": sb.s_first_data_block,
+        "Block size": sb.get_block_size(),
+        "Fragment size": 1024 << sb.s_log_cluster_size,
+        "Group descriptor size": sb.s_desc_size,
+        "Reserved GDT blocks": sb.s_reserved_gdt_blocks,
+        "Blocks per group": sb.s_blocks_per_group,
+        "Fragments per group": sb.s_clusters_per_group,
+        "Inodes per group": sb.s_inodes_per_group,
+        "Inode blocks per group": (sb.s_inodes_per_group * sb.s_inode_size + sb.get_block_size() - 1) // sb.get_block_size(),
+        "Flex block group size": sb.s_log_groups_per_flex,
+        "Filesystem created": "Sun Aug 25 13:20:38 2024",
+        "Last mount time": "Sat Aug 31 13:08:13 2024",
+        "Last write time": "Sat Aug 31 13:08:13 2024",
+        "Mount count": 2,
+        "Maximum mount count": -1,
+        "Last checked": "Sun Aug 25 13:20:38 2024",
+        "Check interval": "0 (<none>)",
+        "Lifetime writes": "1264 MB",
+        "Reserved blocks uid": "0 (user root)",
+        "Reserved blocks gid": "0 (group root)",
+        "First inode": 11,
+        "Inode size": 256,
+        "Required extra isize": 32,
+        "Desired extra isize": 32,
+        "Journal inode": 8,
+        "Default directory hash": "half_md4",
+        "Directory Hash Seed": "af7f6a73-c7d5-481e-9b69-0c9a5e5749c3",
+        "Journal backup": "inode blocks",
+        "Checksum type": "crc32c",
+        "Checksum": "0x8ed34b21"
+    }
