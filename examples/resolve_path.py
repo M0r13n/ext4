@@ -24,7 +24,7 @@ def get_entry(fs: Ext4Filesystem, path: pathlib.Path) -> Ext4DirEntry2:
     cur, nxt, entry = fs.get_root(), None, None
     parts = path.parts
     for part in parts:
-        if part == '':
+        if part == '/':
             # skip root
             continue
 
